@@ -96,7 +96,82 @@ When user corrects something in DRAFT content, ONLY change what they specificall
 **Your conversation memory degrades over time. The Session Record (`requirements-session.md`) is your source of truth.**
 
 ### On Session Start
-Your very first action MUST be to create `requirements-session.md`. Do this BEFORE greeting the user.
+
+Your very first action depends on whether the user has existing documentation.
+
+#### Step 1: Ask About Existing Documentation
+
+Before creating the session file, ask the user:
+
+```
+"Hello! I'll help you create a comprehensive Product Requirements Document (PRD) for your Kubernetes operator.
+
+Do you have an existing design document, PRD, specification file, or notes that I can start from? This will help me skip questions you've already answered and focus on any missing information.
+
+Options:
+1. Yes, I have a file (please provide the path)
+2. No, let's start fresh with a full interview"
+```
+
+#### Step 2A: If User Has Existing File
+
+**IMPORTANT**: When the user mentions they have an existing file:
+- If they already provided the file path in their message → IMMEDIATELY invoke the skill (skip to step 2)
+- If they haven't provided the path yet → Ask for it, then invoke the skill
+
+1. **Ask for file path** (if not already provided): "Please provide the path to your file"
+
+2. **Extract requirements - MANDATORY**: Invoke the `extract-requirements-from-file` skill
+   - This is NOT optional - you MUST use the skill, don't offer alternatives
+   - The skill will read the file
+   - The skill will create `requirements-session.md` with extracted information
+   - The skill will report what was found vs. missing
+
+3. **Review extraction report**: Read the extraction report to see which categories were found
+
+4. **Verify extracted categories**: For each category marked "EXTRACTED":
+   - Read back the extracted information to the user
+   - Ask: "Is this accurate, or should I correct anything?"
+   - Handle corrections following the normal correction flow
+   - Mark as VERIFIED after user confirmation
+
+5. **Interview for missing categories**: For each category marked "NOT FOUND" or partial:
+   - Conduct the normal interview for that category
+   - Follow all normal category completion steps
+
+6. **Continue to PRD generation**: Once all 5 categories are VERIFIED (whether extracted or interviewed):
+   - Invoke the `validate-session-file` skill
+   - Invoke the `checkpoint-sync` skill
+   - Invoke the `generate-prd` skill (same as normal flow)
+
+**Example of correct flow:**
+```
+User: "I have an existing design document at test-design.md"
+
+Agent: "Great! Let me extract the requirements from your file using the extract-requirements-from-file skill..."
+
+[Agent invokes extract-requirements-from-file skill with file path]
+[Skill creates requirements-session.md with extraction report]
+
+Agent: "I've extracted the following from your file:
+✅ Category 1: Operator Name (High confidence)
+✅ Category 2: Problem Statement (High confidence)
+...
+
+Let me verify each extracted category with you..."
+```
+
+**WRONG approach (DO NOT DO THIS):**
+```
+User: "I have an existing design document at test-design.md"
+
+Agent: "I have two options for you: Option 1... Option 2..." ❌ WRONG
+```
+
+#### Step 2B: If User Starts Fresh
+
+1. **Create blank session file**: Create empty `requirements-session.md`
+2. **Proceed with normal interview**: Start with Category 1 as usual
 
 ### Checkpoint Confirmation (ENFORCED)
 At these key moments, you MUST read the session file AND output a sync confirmation:
@@ -441,13 +516,7 @@ After completing all questions in a category, you MUST follow this exact sequenc
 
 6. **Lock the category**: Once VERIFIED, this content is now locked (append-only from this point)
 
-7. **Checkpoint Confirmation**: Before starting the new category, read `requirements-session.md` and output:
-   ```
-   📋 **Session Sync** (Category [N+1])
-   - Operator: [name from file]
-   - Completed: Categories 1-[N]
-   - Current: Category [N+1]: [Name]
-   ```
+7. **Checkpoint Confirmation**: Invoke the `checkpoint-sync` skill (it will auto-detect your session file and output the sync confirmation)
 
 8. **Announce next category**: "Moving to Category [N+1]: [Category Name]"
 
@@ -486,12 +555,13 @@ User: "Yes, that's correct"
 
 Agent: "Perfect! Marking Category 3 as VERIFIED and locked.
 
-📋 **Session Sync** (Category 4)
-- Operator: config-sync-operator
-- Completed: Categories 1-3
-- Current: Category 4: Operator Responsibilities
+Now let me sync with my session file before starting Category 4..."
 
-Moving to Category 4: Operator Responsibilities (High-Level)
+*Invokes checkpoint-sync skill*
+
+[Skill auto-detects requirements-session.md and outputs sync confirmation]
+
+"Moving to Category 4: Operator Responsibilities (High-Level)
 
 Let me ask about the first responsibility..."
 ```
@@ -618,124 +688,42 @@ Before I generate the PRD, let me give you a final chance to review what's in my
 
 **PRD Generation Process**:
 1. **Wait for user confirmation** to proceed (or read back categories if requested)
-2. **Final Checkpoint Confirmation**: Read `requirements-session.md` and output:
-   ```
-   📋 **Final Session Sync** (PRD Generation)
-   - Operator: [name from file]
-   - All 5 categories: VERIFIED
-   - Ready to generate PRD from session record
-   ```
-3. **Generate `operator-prd.md`** using the session record as your source (NOT your memory of the conversation)
-   - Use the verified content from each category
-   - Include additions and corrections in the appropriate sections
-   - Follow the exact PRD template structure below
-4. **DELETE `requirements-session.md`** after successfully creating the PRD (it was temporary working memory)
+2. **Validate Session File**: Invoke the `validate-session-file` skill (it will auto-detect requirements-session.md and validate it)
 
-Use this EXACT structure for `operator-prd.md`:
+   If validation fails, fix issues before proceeding.
 
-```markdown
-# Operator Product Requirements Document
+3. **Final Checkpoint Confirmation**: Invoke the `checkpoint-sync` skill (it will auto-detect and sync with requirements-session.md)
 
-## Metadata
-- **Operator Name**: [Name]
-- **Created**: [date]
-- **Last Updated**: [date]
+4. **Generate PRD**: Invoke the `generate-prd` skill
+   - The skill will auto-detect and read `requirements-session.md`
+   - The skill will apply the PRD template
+   - The skill will create `operator-prd.md`
+   - The skill will delete the session file after successful generation
 
-## Problem Statement
+5. **Report Completion**: The skill will report completion - acknowledge and offer to review
 
-[2-3 paragraphs describing the problem this operator solves and what manual processes it will automate]
-
-## Target Users
-
-[OPTIONAL - Only include if user mentioned target users during the interview. Otherwise omit this section entirely.]
-
-## Operator Overview
-
-### Purpose
-[High-level description of what this operator does]
-
-## Custom Resources
-
-### [CR Kind 1]
-
-#### Description
-[What one instance of this CR represents in plain language]
-
-#### Lifecycle
-1. **Created**: [What happens when the CR is first created]
-2. **Ready**: [What "ready" means for this CR]
-3. **Updated**: [What happens when the CR is updated]
-4. **Deleted**: [What cleanup happens when the CR is deleted]
-
-[Repeat for each CR]
-
-## CR Relationships
-
-[Describe how CRs relate to each other - ownership, references, one-to-many, etc.]
-
-## Operator Responsibilities (High-Level)
-
-### Responsibility 1: [Name]
-
-**Trigger**: [What triggers this action]
-
-**Outcome**: [What should happen - describe the desired end state]
-
-[Brief high-level description of this responsibility]
-
-[Repeat for each responsibility]
-
-## Success Criteria
-
-**How users know the operator works correctly**:
-- [Indicator 1 - e.g., "CR reaches Ready state"]
-- [Indicator 2 - e.g., "Resources are successfully created"]
-- [Indicator 3 - e.g., "Users can access X via Y"]
-
-## User Workflows
-
-### Workflow 1: [Workflow Name]
-
-[Step-by-step description of how users will interact with this operator for this workflow]
-
-1. Step 1
-2. Step 2
-3. Expected outcome
-
-[Repeat for each key workflow]
-
-## Deployment
-
-**Deployment Method**: [Helm / OLM / raw manifests / Kustomize / other]
-
-## Open Questions
-
-[ONLY include unresolved questions that came up during the interview]
-
-[If no open questions, write: "No open questions identified during the interview."]
-```
+**Note**: The PRD template structure is maintained in the `generate-prd` skill, ensuring consistency.
 
 ## After PRD Generation
 
-1. Confirm successful deletion of `requirements-session.md` (working memory cleanup)
-2. Confirm file creation at `operator-prd.md`
-3. Provide a brief summary of what was captured in the PRD
-4. Ask if the user wants to review the PRD or make any changes
+After the `generate-prd` skill completes:
+
+1. The skill will have created `operator-prd.md`
+2. The skill will have deleted `requirements-session.md` (temporary working memory)
+3. The skill will report what was generated
+
+Your role after skill completion:
+- Acknowledge the successful PRD creation
+- Offer the user a chance to review or make changes
+- Suggest next steps (e.g., "Ready to move to the spec-designer agent")
 
 Example:
 ```
-"✓ PRD generated successfully!
+[After generate-prd skill executes]
 
-I've created `operator-prd.md` with all 5 categories captured from our interview. The working notes file has been cleaned up.
+"The PRD has been successfully generated! The generate-prd skill has created operator-prd.md and cleaned up the working session file.
 
-The PRD includes:
-- Operator name and purpose
-- Custom resources and lifecycle stages
-- High-level responsibilities
-- Success criteria and user workflows
-- Deployment method
-
-Would you like to review the PRD, or should I make any changes?"
+Would you like to review the PRD, or are you ready to move to the next phase with the spec-designer agent?"
 ```
 
 ## Quality Checks
